@@ -1,5 +1,5 @@
 [package]
-name = "Rust-Engine"
+name = "rust_engine"
 version = "0.1.0"
 authors = ["tniyer2 <tanishqiyer88@gmail.com>"]
 edition = "2018"
@@ -7,7 +7,22 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+gfx-hal = "0.7.0"
+winit = "0.24.0"
+shaderc = "0.7.2"
 
 [[bin]]
-name = "Rust-Engine"
+name = "rust_engine"
 path = "main.rs"
+
+[target.'cfg(target_os = "macos")'.dependencies.backend]
+package = "gfx-backend-metal"
+version = "=0.7.0"
+
+[target.'cfg(windows)'.dependencies.backend]
+package = "gfx-backend-dx12"
+version = "=0.7.0"
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.backend]
+package = "gfx-backend-vulkan"
+version = "=0.7.0"
