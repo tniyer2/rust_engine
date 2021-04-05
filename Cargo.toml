@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 gfx-hal = "0.7.0"
+raw-window-handle = "0.3.3"
 winit = "0.24.0"
 shaderc = "0.7.2"
 
