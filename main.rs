@@ -1,8 +1,11 @@
 
 use gfx_hal::window::Extent2D;
 
-use winit::window::WindowBuilder;
-use winit::event_loop::EventLoop;
+use winit::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder
+};
 
 mod renderer;
 use renderer::Renderer;
@@ -34,10 +37,52 @@ fn main() {
         .expect("Failed to create window");
 
     // Describe Window Dimensions
-    let mut surface_extent = Extent2D {
+    let surface_extent = Extent2D {
         width: physical_window_size.width,
         height: physical_window_size.height,
     };
 
-    Renderer::new(APP_NAME, window, surface_extent, event_loop);
+    let mut renderer = Renderer::<backend::Backend>::new(APP_NAME, &window, surface_extent);
+
+    // Run EventLoop
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Poll;
+
+        // Handle Events
+        match event {
+            // OS is Requesting to Close the Window.
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                println!("The close button was pressed; stopping");
+                *control_flow = ControlFlow::Exit
+            },
+
+            // The Window has Resized
+            Event::WindowEvent {
+                event: WindowEvent::Resized(dims),
+                ..
+            } => {
+            	renderer.update_dimensions(dims.width, dims.height);
+            },
+
+            // The Logical Scale has Changed
+            Event::WindowEvent {
+                event: WindowEvent::ScaleFactorChanged {new_inner_size, ..},
+                ..
+            } => {
+            	renderer.update_dimensions(new_inner_size.width, new_inner_size.height);
+            },
+
+            // Execute Non-draw Logic
+            Event::MainEventsCleared => window.request_redraw(),
+
+            // Execute Draw Logic
+            Event::RedrawRequested(..) => {
+                renderer.render();
+            },
+            _ => ()
+        }
+    });
 }

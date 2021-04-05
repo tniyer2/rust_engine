@@ -7,38 +7,42 @@ use gfx_hal::{
     device::Device,
     window::{Extent2D, PresentationSurface, Surface},
     Instance,
-};
-
-use winit::{
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop}
+    queue::CommandQueue,
+    command::CommandBuffer
 };
 
 use std::iter;
 
-pub struct Renderer {}
+pub struct Renderer<B: gfx_hal::Backend> {
+	resource_holder: ResourceHolder<B>,
+	surface_extent: Extent2D,
+	should_configure_swapchain: bool,
+	adapter: gfx_hal::adapter::Adapter<B>,
+	command_buffer: B::CommandBuffer,
+	queue_group: gfx_hal::queue::family::QueueGroup<B>,
+	color_format: gfx_hal::format::Format
+}
 
-impl Renderer {
+impl<B: gfx_hal::Backend> Renderer<B> {
 	pub fn new(
-		APP_NAME: &str,
-		window: winit::window::Window,
-		surface_extent: gfx_hal::window::Extent2D,
-		event_loop: winit::event_loop::EventLoop<()>) {
+		app_name: &str,
+		window: &winit::window::Window,
+		surface_extent: gfx_hal::window::Extent2D) -> Renderer<B> {
 
-		let mut surface_extent = surface_extent;
+		let surface_extent = surface_extent;
 
 		// Set Up Access to the Graphics Backend
 	    let (instance, surface, adapter) = {
 	        // Create an Instance
 	        // An Instance Exposes the Surface and Adapter
-	        let instance = backend::Instance::create(APP_NAME, 1)
+	        let instance = B::Instance::create(app_name, 1)
 	            .expect("Backend not supported");
 
 	        // Create a Surface
 	        // A Surface Describes a Display's Capabilities
 	        let surface = unsafe {
 	            instance
-	                .create_surface(&window)
+	                .create_surface(window)
 	                .expect("Failed to create surface for window")
 	        };
 
@@ -50,7 +54,7 @@ impl Renderer {
 	    };
 
 		// Set Up a Logical Device
-	    let (device, mut queue_group) = {
+	    let (device, queue_group) = {
 	        use gfx_hal::queue::family::QueueFamily;
 
 	        // Find a Compatible QueueFamily
@@ -76,7 +80,7 @@ impl Renderer {
 	    };
 
 	    // Set Up a Command Buffer
-	    let (command_pool, mut command_buffer) = unsafe {
+	    let (command_pool, command_buffer) = unsafe {
 	        use gfx_hal::command::Level;
 	        use gfx_hal::pool::{CommandPool, CommandPoolCreateFlags};
 
@@ -156,7 +160,7 @@ impl Renderer {
 
 	    // Create a Pipeline
 	    let pipeline = unsafe {
-	        make_pipeline::<backend::Backend>(
+	        make_pipeline::<B>(
 	            &device,
 	            &render_pass,
 	            &pipeline_layout,
@@ -171,7 +175,7 @@ impl Renderer {
 	    let rendering_complete_semaphore = device.create_semaphore().expect("Out of memory");
 
 	    // Move all Resources to a Single Struct
-	    let mut resource_holder: ResourceHolder<backend::Backend> =
+	    let resource_holder: ResourceHolder<B> =
 	        ResourceHolder(ManuallyDrop::new(Resources {
 	            instance,
 	            surface,
@@ -186,229 +190,193 @@ impl Renderer {
 	            rendering_complete_semaphore,
 	        }));
 
-	    let mut should_configure_swapchain = true;
+	    Renderer {
+	    	resource_holder: resource_holder,
+	    	surface_extent: surface_extent,
+	    	should_configure_swapchain: true,
+	    	adapter: adapter,
+	    	command_buffer: command_buffer,
+	    	queue_group: queue_group,
+	    	color_format: color_format
+	    }
+	}
 
-	    // Run EventLoop
-	    event_loop.run(move |event, _, control_flow| {
-	        *control_flow = ControlFlow::Poll;
+	pub fn update_dimensions(&mut self, width: gfx_hal::image::Size, height: gfx_hal::image::Size) {
+		self.surface_extent = Extent2D {
+            width: width,
+            height: height,
+        };
+        self.should_configure_swapchain = true;
+	}
 
-	        // Handle Events
-	        match event {
-	            // OS is Requesting to Close the Window.
-	            Event::WindowEvent {
-	                event: WindowEvent::CloseRequested,
-	                ..
-	            } => {
-	                println!("The close button was pressed; stopping");
-	                *control_flow = ControlFlow::Exit
-	            },
+	pub fn render(&mut self) {
+		let res: &mut Resources<_> = &mut self.resource_holder.0;
+        let render_pass = &res.render_passes[0];
+        let pipeline = &res.pipelines[0];
 
-	            // The Window has Resized
-	            Event::WindowEvent {
-	                event: WindowEvent::Resized(dims),
-	                ..
-	            } => {
-	                // Set to Configure Swapchain
-	                surface_extent = Extent2D {
-	                    width: dims.width,
-	                    height: dims.height,
-	                };
-	                should_configure_swapchain = true;
-	            },
+        // Clear Command Buffer For Use
+        unsafe {
+        	use gfx_hal::pool::CommandPool;
 
-	            // The Logical Scale has Changed
-	            Event::WindowEvent {
-	                event: WindowEvent::ScaleFactorChanged {new_inner_size, ..},
-	                ..
-	            } => {
-	                // Set to Configure Swapchain
-	                surface_extent = Extent2D {
-	                    width: new_inner_size.width,
-	                    height: new_inner_size.height,
-	                };
-	                should_configure_swapchain = true;
-	            },
+            // We refuse to wait more than a second, to avoid hanging.
+            let render_timeout_ns = 1_000_000_000;
 
-	            // Execute Non-draw Logic
-	            Event::MainEventsCleared => window.request_redraw(),
+            res.device
+                .wait_for_fence(&res.submission_complete_fence, render_timeout_ns)
+                .expect("Out of memory or device lost");
 
-	            // Execute Draw Logic
-	            Event::RedrawRequested(..) => {
-	                let res: &mut Resources<_> = &mut resource_holder.0;
-	                let render_pass = &res.render_passes[0];
-	                let pipeline = &res.pipelines[0];
+            res.device
+                .reset_fence(&mut res.submission_complete_fence)
+                .expect("Out of memory");
 
-	                // Clear Command Buffer For Use
-	                unsafe {
-	                    use gfx_hal::pool::CommandPool;
+            res.command_pool.reset(false);
+        }
 
-	                    // We refuse to wait more than a second, to avoid hanging.
-	                    let render_timeout_ns = 1_000_000_000;
+        // Update Swapchain if Needed
+        // Get Framebuffer Attachment from Swapchain
+        let framebuffer_attachment = {
+            use gfx_hal::window::SwapchainConfig;
 
-	                    res.device
-	                        .wait_for_fence(&res.submission_complete_fence, render_timeout_ns)
-	                        .expect("Out of memory or device lost");
+            // Get Supported Swapchain Capabilities
+            let caps = res.surface.capabilities(&self.adapter.physical_device);
 
-	                    res.device
-	                        .reset_fence(&mut res.submission_complete_fence)
-	                        .expect("Out of memory");
+            // Create a Swapchain Configuration
+            let mut swapchain_config =
+                SwapchainConfig::from_caps(&caps, self.color_format, self.surface_extent);
 
-	                    res.command_pool.reset(false);
-	                }
+            // This seems to fix some fullscreen slowdown on macOS.
+            if caps.image_count.contains(&3) {
+                swapchain_config.image_count = 3;
+            }
 
-	                // Update Swapchain if Needed
-	                // Get Framebuffer Attachment from Swapchain
-	                let framebuffer_attachment = {
-	                    use gfx_hal::window::SwapchainConfig;
+            // Update new Window Size
+            self.surface_extent = swapchain_config.extent;
 
-	                    // Get Supported Swapchain Capabilities
-	                    let caps = res.surface.capabilities(&adapter.physical_device);
+            let fat = swapchain_config.framebuffer_attachment();
 
-	                    // Create a Swapchain Configuration
-	                    let mut swapchain_config =
-	                        SwapchainConfig::from_caps(&caps, color_format, surface_extent);
+            // Configure the Swapchain with the new Configuration
+            if self.should_configure_swapchain {
+                unsafe {
+                    res.surface
+                        .configure_swapchain(&res.device, swapchain_config)
+                        .expect("Failed to configure swapchain");
+                };
 
-	                    // This seems to fix some fullscreen slowdown on macOS.
-	                    if caps.image_count.contains(&3) {
-	                        swapchain_config.image_count = 3;
-	                    }
+                self.should_configure_swapchain = false;
+            }
 
-	                    // Update new Window Size
-	                    surface_extent = swapchain_config.extent;
+            fat
+        };
 
-	                    let fat = swapchain_config.framebuffer_attachment();
+        // Get Image From Swapchain
+        let surface_image = unsafe {
+            // We refuse to wait more than a second, to avoid hanging.
+            let acquire_timeout_ns = 1_000_000_000;
 
-	                    // Configure the Swapchain with the new Configuration
-	                    if should_configure_swapchain {
-	                        unsafe {
-	                            res.surface
-	                                .configure_swapchain(&res.device, swapchain_config)
-	                                .expect("Failed to configure swapchain");
-	                        };
+            match res.surface.acquire_image(acquire_timeout_ns) {
+                Ok((image, _)) => image,
+                Err(_) => {
+                    self.should_configure_swapchain = true;
+                    return;
+                }
+            }
+        };
 
-	                        should_configure_swapchain = false;
-	                    }
+        // Create a FrameBuffer
+        // A FrameBuffer Stores an Image, Fills an Attachment
+        let framebuffer = unsafe {
+            use gfx_hal::image::Extent;
 
-	                    fat
-	                };
+            res.device
+                .create_framebuffer(
+                    render_pass,
+                    iter::once(framebuffer_attachment),
+                    Extent {
+                        width: self.surface_extent.width,
+                        height: self.surface_extent.height,
+                        depth: 1,
+                    },
+                )
+                .unwrap()
+        };
 
-	                // Get Image From Swapchain
-	                let surface_image = unsafe {
-	                    // We refuse to wait more than a second, to avoid hanging.
-	                    let acquire_timeout_ns = 1_000_000_000;
+        // Describe the Viewport
+        let viewport = {
+            use gfx_hal::pso::{Rect, Viewport};
 
-	                    match res.surface.acquire_image(acquire_timeout_ns) {
-	                        Ok((image, _)) => image,
-	                        Err(_) => {
-	                            should_configure_swapchain = true;
-	                            return;
-	                        }
-	                    }
-	                };
+            Viewport {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: self.surface_extent.width as i16,
+                    h: self.surface_extent.height as i16,
+                },
+                depth: 0.0..1.0,
+            }
+        };
 
-	                // Create a FrameBuffer
-	                // A FrameBuffer Stores an Image, Fills an Attachment
-	                let framebuffer = unsafe {
-	                    use std::borrow::Borrow;
+        // Line Up Draw Commands
+        unsafe {
+        	use std::borrow::Borrow;
 
-	                    use gfx_hal::image::Extent;
+            use gfx_hal::command::{
+                ClearColor, ClearValue, CommandBufferFlags, SubpassContents,
+                RenderAttachmentInfo
+            };
 
-	                    res.device
-	                        .create_framebuffer(
-	                            render_pass,
-	                            iter::once(framebuffer_attachment),
-	                            Extent {
-	                                width: surface_extent.width,
-	                                height: surface_extent.height,
-	                                depth: 1,
-	                            },
-	                        )
-	                        .unwrap()
-	                };
+            self.command_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
 
-	                // Describe the Viewport
-	                let viewport = {
-	                    use gfx_hal::pso::{Rect, Viewport};
+            self.command_buffer.set_viewports(0, iter::once(viewport.clone()));
+            self.command_buffer.set_scissors(0, iter::once(viewport.rect));
 
-	                    Viewport {
-	                        rect: Rect {
-	                            x: 0,
-	                            y: 0,
-	                            w: surface_extent.width as i16,
-	                            h: surface_extent.height as i16,
-	                        },
-	                        depth: 0.0..1.0,
-	                    }
-	                };
+            // Clear to Black
+            self.command_buffer.begin_render_pass(
+                render_pass,
+                &framebuffer,
+                viewport.rect,
+                iter::once(RenderAttachmentInfo {
+                    image_view: surface_image.borrow(),
+                    clear_value: ClearValue {
+                        color: ClearColor {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
+                    },
+                }),
+                SubpassContents::Inline
+            );
 
-	                // Line Up Draw Commands
-	                unsafe {
-	                    use std::borrow::Borrow;
+            self.command_buffer.bind_graphics_pipeline(pipeline);
 
-	                    use gfx_hal::command::{
-	                        ClearColor, ClearValue, CommandBuffer, CommandBufferFlags, SubpassContents,
-	                        RenderAttachmentInfo
-	                    };
+            // Draw a Triangle
+            self.command_buffer.draw(0..3, 0..1);
 
-	                    command_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
+            self.command_buffer.end_render_pass();
+            self.command_buffer.finish();
+        }
 
-	                    command_buffer.set_viewports(0, iter::once(viewport.clone()));
-	                    command_buffer.set_scissors(0, iter::once(viewport.rect));
+        // Execute Draw Commands and Present
+        unsafe {
+            // Submit Commands to be Executed
+            self.queue_group.queues[0].submit(
+                iter::once(&self.command_buffer),
+                iter::empty(),
+                iter::once(&res.rendering_complete_semaphore),
+                Some(&mut res.submission_complete_fence)
+            );
 
-	                    // Clear to Black
-	                    command_buffer.begin_render_pass(
-	                        render_pass,
-	                        &framebuffer,
-	                        viewport.rect,
-	                        iter::once(RenderAttachmentInfo {
-	                            image_view: surface_image.borrow(),
-	                            clear_value: ClearValue {
-	                                color: ClearColor {
-	                                    float32: [0.0, 0.0, 0.0, 1.0],
-	                                },
-	                            },
-	                        }),
-	                        SubpassContents::Inline
-	                    );
+            // Present Swapchain Image after all Commands Execute
+            let result = self.queue_group.queues[0].present(
+                &mut res.surface,
+                surface_image,
+                Some(&mut res.rendering_complete_semaphore),
+            );
 
-	                    command_buffer.bind_graphics_pipeline(pipeline);
+            // Reconfigure Swapchain on the Next Frame
+            // If Error when Presenting
+            self.should_configure_swapchain |= result.is_err();
 
-	                    // Draw a Triangle
-	                    command_buffer.draw(0..3, 0..1);
-
-	                    command_buffer.end_render_pass();
-	                    command_buffer.finish();
-	                }
-
-	                // Execute Draw Commands and Present
-	                unsafe {
-	                    use gfx_hal::queue::CommandQueue;
-
-	                    // Submit Commands to be Executed
-	                    queue_group.queues[0].submit(
-	                        iter::once(&command_buffer),
-	                        iter::empty(),
-	                        iter::once(&res.rendering_complete_semaphore),
-	                        Some(&mut res.submission_complete_fence)
-	                    );
-
-	                    // Present Swapchain Image after all Commands Execute
-	                    let result = queue_group.queues[0].present(
-	                        &mut res.surface,
-	                        surface_image,
-	                        Some(&mut res.rendering_complete_semaphore),
-	                    );
-
-	                    // Reconfigure Swapchain on the Next Frame
-	                    // If Error when Presenting
-	                    should_configure_swapchain |= result.is_err();
-
-	                    res.device.destroy_framebuffer(framebuffer);
-	                }
-	            },
-	            _ => ()
-	        }
-	    });
+            res.device.destroy_framebuffer(framebuffer);
+        }
 	}
 }
 
