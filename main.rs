@@ -1,7 +1,7 @@
 
 use winit::{
+    event_loop::{EventLoop, ControlFlow},
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder
 };
 
@@ -14,7 +14,7 @@ fn main() {
 
     let event_loop = EventLoop::new();
 
-    let (logical_window_size, physical_window_size) = {
+    let (logical_size, physical_size) = {
         use winit::dpi::{LogicalSize, PhysicalSize};
 
         let dpi = event_loop.primary_monitor().unwrap().scale_factor();
@@ -26,14 +26,13 @@ fn main() {
 
     let window = WindowBuilder::new()
         .with_title(APP_NAME)
-        .with_inner_size(logical_window_size)
+        .with_inner_size(logical_size)
         .build(&event_loop)
         .expect("Failed to create window");
 
     let mut renderer = Renderer::<backend::Backend>::new(
         APP_NAME,
-        physical_window_size.width,
-        physical_window_size.height,
+        physical_size.into(),
         &window);
 
     event_loop.run(move |event, _, control_flow| {
@@ -48,12 +47,12 @@ fn main() {
             },
 
             // The Window has Resized
-            Event::WindowEvent {event: WindowEvent::Resized(dims), ..} =>
-               renderer.update_dimensions(dims.width, dims.height),
+            Event::WindowEvent {event: WindowEvent::Resized(new_size), ..} =>
+               renderer.update_dimensions(new_size.into()),
 
             // The Logical Scale has Changed
             Event::WindowEvent {event: WindowEvent::ScaleFactorChanged {new_inner_size, ..}, ..} =>
-               renderer.update_dimensions(new_inner_size.width, new_inner_size.height),
+               renderer.update_dimensions(new_inner_size.clone().into()),
 
             // Execute Non-draw Logic
             Event::MainEventsCleared => window.request_redraw(),

@@ -42,8 +42,7 @@ struct Resources<B: gfx_hal::Backend> {
 impl<B: gfx_hal::Backend> Renderer<B> {
     pub fn new(
         app_name: &str,
-        width: u32,
-        height: u32,
+        physical_size: [u32; 2],
         window: &impl HasRawWindowHandle
     ) -> Renderer<B> {
 
@@ -192,7 +191,7 @@ impl<B: gfx_hal::Backend> Renderer<B> {
         let rendering_complete_semaphore = device.create_semaphore().expect("Out of memory");
 
         // Move all Resources to a Single Struct
-        let resources = Resources {
+        let resources = Some(Resources {
             instance,
             surface,
             device,
@@ -210,19 +209,24 @@ impl<B: gfx_hal::Backend> Renderer<B> {
 
             submission_complete_fence,
             rendering_complete_semaphore
+        });
+
+        let surface_extent = Extent2D {
+            width: physical_size[0],
+            height: physical_size[1]
         };
 
         Renderer {
-            resources: Some(resources),
-            surface_extent: Extent2D { width, height },
+            resources,
+            surface_extent,
             should_configure_swapchain: true
         }
     }
 
-    pub fn update_dimensions(&mut self, width: u32, height: u32) {
+    pub fn update_dimensions(&mut self, physical_size: [u32; 2]) {
         self.surface_extent = Extent2D {
-            width: width,
-            height: height
+            width: physical_size[0],
+            height: physical_size[1]
         };
         self.should_configure_swapchain = true;
     }
