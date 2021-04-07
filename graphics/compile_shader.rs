@@ -5,7 +5,7 @@ use shaderc::ShaderKind;
 pub fn compile_shader(source_text: &str, shader_kind: ShaderKind) -> Vec<u32> {
     let mut compiler = shaderc::Compiler::new().unwrap();
 
-    let input_file = "unnamed";
+    let input_file = "unnamed"; // used in error messages
     let entry_point = "main";
     let options = None;
 
