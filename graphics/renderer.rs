@@ -13,6 +13,8 @@ use gfx_hal::{
     queue::family::QueueGroup
 };
 
+use super::compile_shader::compile_shader;
+
 pub struct Renderer<B: gfx_hal::Backend> {
     resources: Option<Resources<B>>,
     surface_extent: Extent2D,
@@ -43,8 +45,10 @@ impl<B: gfx_hal::Backend> Renderer<B> {
     pub fn new(
         app_name: &str,
         physical_size: [u32; 2],
-        window: &impl HasRawWindowHandle
-    ) -> Renderer<B> {
+        window: &impl HasRawWindowHandle,
+        vertex_shader: &str,
+        fragment_shader: &str
+    ) -> Self {
 
         // Set Up Access to the Graphics Backend
         let (instance, surface, adapter) = {
@@ -163,10 +167,6 @@ impl<B: gfx_hal::Backend> Renderer<B> {
             }
         };
 
-        // Load Shaders
-        let vertex_shader = include_str!("shaders/part-1.vert");
-        let fragment_shader = include_str!("shaders/part-1.frag");
-
         // Create a Pipeline Layout
         let pipeline_layout = unsafe {
             device
@@ -176,7 +176,7 @@ impl<B: gfx_hal::Backend> Renderer<B> {
 
         // Create a Pipeline
         let pipeline = unsafe {
-            make_pipeline::<B>(
+            Self::make_pipeline(
                 &device,
                 &render_pass,
                 &pipeline_layout,
@@ -216,11 +216,93 @@ impl<B: gfx_hal::Backend> Renderer<B> {
             height: physical_size[1]
         };
 
-        Renderer {
+        Self {
             resources,
             surface_extent,
             should_configure_swapchain: true
         }
+    }
+
+    /// Create and Return a Pipeline.
+    unsafe fn make_pipeline(
+        device: &B::Device,
+        render_pass: &B::RenderPass,
+        pipeline_layout: &B::PipelineLayout,
+        vertex_shader: &str,
+        fragment_shader: &str,
+    ) -> B::GraphicsPipeline {
+
+        use gfx_hal::pass::Subpass;
+        use gfx_hal::pso::{
+            BlendState, ColorBlendDesc, ColorMask, EntryPoint, Face, GraphicsPipelineDesc,
+            InputAssemblerDesc, Primitive, PrimitiveAssemblerDesc, Rasterizer, Specialization
+        };
+        
+        // Create Shader Object Modules
+        let vertex_shader_module = device
+            .create_shader_module(&compile_shader(vertex_shader, ShaderKind::Vertex))
+            .expect("Failed to create vertex shader module");
+
+        let fragment_shader_module = device
+            .create_shader_module(&compile_shader(fragment_shader, ShaderKind::Fragment))
+            .expect("Failed to create fragment shader module");
+
+        // Describe Shader Entry Points
+        let (vertex_shader_entry, fragment_shader_entry) = (
+            EntryPoint {
+                entry: "main",
+                module: &vertex_shader_module,
+                specialization: Specialization::default()
+            },
+            EntryPoint {
+                entry: "main",
+                module: &fragment_shader_module,
+                specialization: Specialization::default()
+            },
+        );
+
+        // Describe the Primitive Assembler
+        // A Primitive Assembler Describes how Input is Transformed into Primitives
+        let primitive_assembler = PrimitiveAssemblerDesc::Vertex {
+            buffers: &[],
+            attributes: &[],
+            input_assembler: InputAssemblerDesc::new(Primitive::TriangleList),
+            vertex: vertex_shader_entry,
+            tessellation: None,
+            geometry: None
+        };
+
+        // Describe the Pipeline
+        let mut pipeline_desc = GraphicsPipelineDesc::new(
+            primitive_assembler,
+            Rasterizer {
+                cull_face: Face::BACK,
+                ..Rasterizer::FILL
+            },
+            Some(fragment_shader_entry),
+            pipeline_layout,
+            Subpass {
+                index: 0,
+                main_pass: render_pass
+            },
+        );
+
+        // Set Blend Mode to Alpha Blend
+        pipeline_desc.blender.targets.push(ColorBlendDesc {
+            mask: ColorMask::ALL,
+            blend: Some(BlendState::ALPHA)
+        });
+
+        // Create the Pipeline
+        let pipeline = device
+            .create_graphics_pipeline(&pipeline_desc, None)
+            .expect("Failed to create graphics pipeline");
+
+        // Clean Up Shader Object Modules
+        device.destroy_shader_module(vertex_shader_module);
+        device.destroy_shader_module(fragment_shader_module);
+
+        pipeline
     }
 
     pub fn update_dimensions(&mut self, physical_size: [u32; 2]) {
@@ -427,97 +509,4 @@ impl<B: gfx_hal::Backend> Drop for Renderer<B> {
             r.instance.destroy_surface(r.surface);
         };
     }
-}
-
-/// Compiles GLSL Source Code and Returns SPIR-V Binary.
-fn compile_shader(glsl: &str, shader_kind: ShaderKind) -> Vec<u32> {
-    let mut compiler = shaderc::Compiler::new().unwrap();
-
-    compiler
-        .compile_into_spirv(glsl, shader_kind, "unnamed", "main", None)
-        .expect("Failed to compile shader")
-        .as_binary()
-        .to_vec()
-}
-
-/// Create and Return a Pipeline.
-unsafe fn make_pipeline<B: gfx_hal::Backend>(
-    device: &B::Device,
-    render_pass: &B::RenderPass,
-    pipeline_layout: &B::PipelineLayout,
-    vertex_shader: &str,
-    fragment_shader: &str,
-) -> B::GraphicsPipeline {
-
-    use gfx_hal::pass::Subpass;
-    use gfx_hal::pso::{
-        BlendState, ColorBlendDesc, ColorMask, EntryPoint, Face, GraphicsPipelineDesc,
-        InputAssemblerDesc, Primitive, PrimitiveAssemblerDesc, Rasterizer, Specialization
-    };
-    
-    // Create Shader Object Modules
-    let vertex_shader_module = device
-        .create_shader_module(&compile_shader(vertex_shader, ShaderKind::Vertex))
-        .expect("Failed to create vertex shader module");
-
-    let fragment_shader_module = device
-        .create_shader_module(&compile_shader(fragment_shader, ShaderKind::Fragment))
-        .expect("Failed to create fragment shader module");
-
-    // Describe Shader Entry Points
-    let (vertex_shader_entry, fragment_shader_entry) = (
-        EntryPoint {
-            entry: "main",
-            module: &vertex_shader_module,
-            specialization: Specialization::default()
-        },
-        EntryPoint {
-            entry: "main",
-            module: &fragment_shader_module,
-            specialization: Specialization::default()
-        },
-    );
-
-    // Describe the Primitive Assembler
-    // A Primitive Assembler Describes how Input is Transformed into Primitives
-    let primitive_assembler = PrimitiveAssemblerDesc::Vertex {
-        buffers: &[],
-        attributes: &[],
-        input_assembler: InputAssemblerDesc::new(Primitive::TriangleList),
-        vertex: vertex_shader_entry,
-        tessellation: None,
-        geometry: None
-    };
-
-    // Describe the Pipeline
-    let mut pipeline_desc = GraphicsPipelineDesc::new(
-        primitive_assembler,
-        Rasterizer {
-            cull_face: Face::BACK,
-            ..Rasterizer::FILL
-        },
-        Some(fragment_shader_entry),
-        pipeline_layout,
-        Subpass {
-            index: 0,
-            main_pass: render_pass
-        },
-    );
-
-    // Set Blend Mode to Alpha Blend
-    pipeline_desc.blender.targets.push(ColorBlendDesc {
-        mask: ColorMask::ALL,
-        blend: Some(BlendState::ALPHA)
-    });
-
-    // Create the Pipeline
-    let pipeline = device
-        .create_graphics_pipeline(&pipeline_desc, None)
-        .expect("Failed to create graphics pipeline");
-
-    // Clean Up Shader Object Modules
-    device.destroy_shader_module(vertex_shader_module);
-    device.destroy_shader_module(fragment_shader_module);
-
-    pipeline
 }

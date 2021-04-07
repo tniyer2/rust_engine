@@ -5,8 +5,8 @@ use winit::{
     window::WindowBuilder
 };
 
-mod renderer;
-use renderer::Renderer;
+mod graphics;
+use graphics::Renderer;
 
 fn main() {
     const APP_NAME: &'static str = "Rust Engine";
@@ -30,10 +30,15 @@ fn main() {
         .build(&event_loop)
         .expect("Failed to create window");
 
+    let vertex_shader = include_str!("shaders/part-1.vert");
+    let fragment_shader = include_str!("shaders/part-1.frag");
+
     let mut renderer = Renderer::<backend::Backend>::new(
         APP_NAME,
         physical_size.into(),
-        &window);
+        &window,
+        vertex_shader,
+        fragment_shader);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
