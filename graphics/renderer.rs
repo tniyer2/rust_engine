@@ -95,27 +95,25 @@ impl<B: gfx_hal::Backend> Renderer<B> {
                     .expect("Failed to open device")
             };
 
-            // GPU is Just a Holder.
+            // GPU holds a Logical Device and its Queue Groups.
             (gpu.device, gpu.queue_groups.pop().unwrap())
         };
 
         // Set Up a Command Buffer
         let (command_pool, command_buffer) = unsafe {
-            use gfx_hal::command::Level;
             use gfx_hal::pool::{CommandPool, CommandPoolCreateFlags};
+            use gfx_hal::command::Level;
 
-            // Create a Command Pool for the Logical Device
             let mut command_pool = device
                 .create_command_pool(queue_group.family, CommandPoolCreateFlags::empty())
                 .expect("Out of memory");
 
-            // Create a Command Buffer on the Command Pool
             let command_buffer = command_pool.allocate_one(Level::Primary);
 
             (command_pool, command_buffer)
         };
 
-        // Find an SRGB Compatible Color Format
+        // Find an SRGB Color Format Compatible with the Surface
         let color_format = {
             use gfx_hal::format::{ChannelType, Format};
 
@@ -124,28 +122,36 @@ impl<B: gfx_hal::Backend> Renderer<B> {
                 .supported_formats(&adapter.physical_device)
                 .unwrap_or(vec![]);
 
-            // Set the Default
-            let default_format = *supported_formats.get(0).unwrap_or(&Format::Rgba8Srgb);
+            // Set the Default to Preferred Format
+            let preferred = supported_formats.get(0);
+
+            // If No Preferred Format, Choose Whatever
+            let default = *(preferred.unwrap_or(&Format::Rgba8Srgb));
 
             // Find an SRGB Color Format or Use the Default
             supported_formats
                 .into_iter()
                 .find(|format| format.base_format().1 == ChannelType::Srgb)
-                .unwrap_or(default_format)
+                .unwrap_or(default)
         };
 
         // Create a Render Pass
         let render_pass = {
-            use gfx_hal::image::Layout;
             use gfx_hal::pass::{
-                Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, SubpassDesc
+                Attachment, AttachmentOps,
+                AttachmentLoadOp, AttachmentStoreOp,
+                SubpassDesc
             };
+            use gfx_hal::image::Layout;
 
             // Describe an Attachment
             let color_attachment = Attachment {
                 format: Some(color_format),
                 samples: 1,
-                ops: AttachmentOps::new(AttachmentLoadOp::Clear, AttachmentStoreOp::Store),
+                ops: AttachmentOps::new(
+                    AttachmentLoadOp::Clear,
+                    AttachmentStoreOp::Store
+                ),
                 stencil_ops: AttachmentOps::DONT_CARE,
                 layouts: Layout::Undefined..Layout::Present
             };
@@ -162,7 +168,10 @@ impl<B: gfx_hal::Backend> Renderer<B> {
             // Create a RenderPass with the Descriptions
             unsafe {
                 device
-                    .create_render_pass(iter::once(color_attachment), iter::once(subpass), iter::empty())
+                    .create_render_pass(
+                        iter::once(color_attachment),
+                        iter::once(subpass),
+                        iter::empty())
                     .expect("Out of memory")
             }
         };
@@ -190,35 +199,30 @@ impl<B: gfx_hal::Backend> Renderer<B> {
         // Syncs Internal GPU Processes
         let rendering_complete_semaphore = device.create_semaphore().expect("Out of memory");
 
-        // Move all Resources to a Single Struct
-        let resources = Some(Resources {
-            instance,
-            surface,
-            device,
-            adapter: adapter,
-
-            color_format: color_format,
-
-            command_pool,
-            command_buffer: command_buffer,
-            queue_group: queue_group,
-
-            render_passes: vec![render_pass],
-            pipeline_layouts: vec![pipeline_layout],
-            pipelines: vec![pipeline],
-
-            submission_complete_fence,
-            rendering_complete_semaphore
-        });
-
-        let surface_extent = Extent2D {
-            width: physical_size[0],
-            height: physical_size[1]
-        };
-
         Self {
-            resources,
-            surface_extent,
+            resources: Some(Resources {
+                instance,
+                surface,
+                device,
+                adapter,
+
+                color_format,
+
+                command_pool,
+                command_buffer,
+                queue_group,
+
+                render_passes: vec![render_pass],
+                pipeline_layouts: vec![pipeline_layout],
+                pipelines: vec![pipeline],
+
+                submission_complete_fence,
+                rendering_complete_semaphore
+            }),
+            surface_extent: Extent2D {
+                width: physical_size[0],
+                height: physical_size[1]
+            },
             should_configure_swapchain: true
         }
     }
@@ -231,12 +235,7 @@ impl<B: gfx_hal::Backend> Renderer<B> {
         vertex_shader: &str,
         fragment_shader: &str,
     ) -> B::GraphicsPipeline {
-
         use gfx_hal::pass::Subpass;
-        use gfx_hal::pso::{
-            BlendState, ColorBlendDesc, ColorMask, EntryPoint, Face, GraphicsPipelineDesc,
-            InputAssemblerDesc, Primitive, PrimitiveAssemblerDesc, Rasterizer, Specialization
-        };
         
         // Create Shader Object Modules
         let vertex_shader_module = device
@@ -247,6 +246,9 @@ impl<B: gfx_hal::Backend> Renderer<B> {
             .create_shader_module(&compile_shader(fragment_shader, ShaderKind::Fragment))
             .expect("Failed to create fragment shader module");
 
+        use gfx_hal::pso::{
+            EntryPoint, Specialization
+        };
         // Describe Shader Entry Points
         let (vertex_shader_entry, fragment_shader_entry) = (
             EntryPoint {
@@ -261,8 +263,11 @@ impl<B: gfx_hal::Backend> Renderer<B> {
             },
         );
 
+        use gfx_hal::pso::{
+            PrimitiveAssemblerDesc, InputAssemblerDesc, Primitive
+        };
         // Describe the Primitive Assembler
-        // A Primitive Assembler Describes how Input is Transformed into Primitives
+        // A Primitive Assembler Transforms Input into Primitives
         let primitive_assembler = PrimitiveAssemblerDesc::Vertex {
             buffers: &[],
             attributes: &[],
@@ -272,6 +277,9 @@ impl<B: gfx_hal::Backend> Renderer<B> {
             geometry: None
         };
 
+        use gfx_hal::pso::{
+            GraphicsPipelineDesc, Rasterizer, Face
+        };
         // Describe the Pipeline
         let mut pipeline_desc = GraphicsPipelineDesc::new(
             primitive_assembler,
@@ -284,9 +292,12 @@ impl<B: gfx_hal::Backend> Renderer<B> {
             Subpass {
                 index: 0,
                 main_pass: render_pass
-            },
+            }
         );
 
+        use gfx_hal::pso::{
+            ColorBlendDesc, ColorMask, BlendState
+        };
         // Set Blend Mode to Alpha Blend
         pipeline_desc.blender.targets.push(ColorBlendDesc {
             mask: ColorMask::ALL,
@@ -318,15 +329,15 @@ impl<B: gfx_hal::Backend> Renderer<B> {
         let render_pass = &res.render_passes[0];
         let pipeline = &res.pipelines[0];
 
-        // Clear Command Buffer For Use
+        // Wait Until Previous Draw Commands Are Submitted
         unsafe {
             use gfx_hal::pool::CommandPool;
 
             // We refuse to wait more than a second, to avoid hanging.
-            let render_timeout_ns = 1_000_000_000;
+            const RENDER_TIMEOUT_NS: u64 = 1_000_000_000;
 
             res.device
-                .wait_for_fence(&res.submission_complete_fence, render_timeout_ns)
+                .wait_for_fence(&res.submission_complete_fence, RENDER_TIMEOUT_NS)
                 .expect("Out of memory or device lost");
 
             res.device
@@ -348,7 +359,7 @@ impl<B: gfx_hal::Backend> Renderer<B> {
             let mut swapchain_config =
                 SwapchainConfig::from_caps(&caps, res.color_format, self.surface_extent);
 
-            // This seems to fix some fullscreen slowdown on macOS.
+            // Fix Fullscreen Slowdown on MacOS.
             if caps.image_count.contains(&3) {
                 swapchain_config.image_count = 3;
             }
@@ -374,7 +385,6 @@ impl<B: gfx_hal::Backend> Renderer<B> {
 
         // Get Image From Swapchain
         let surface_image = unsafe {
-            // We refuse to wait more than a second, to avoid hanging.
             let acquire_timeout_ns = 1_000_000_000;
 
             match res.surface.acquire_image(acquire_timeout_ns) {
@@ -387,7 +397,7 @@ impl<B: gfx_hal::Backend> Renderer<B> {
         };
 
         // Create a FrameBuffer
-        // A FrameBuffer Stores an Image, Fills an Attachment
+        // A FrameBuffer Stores an Image to Fill an Attachment
         let framebuffer = unsafe {
             use gfx_hal::image::Extent;
 
@@ -406,7 +416,7 @@ impl<B: gfx_hal::Backend> Renderer<B> {
 
         // Describe the Viewport
         let viewport = {
-            use gfx_hal::pso::{Rect, Viewport};
+            use gfx_hal::pso::{Viewport, Rect};
 
             Viewport {
                 rect: Rect {
@@ -424,8 +434,8 @@ impl<B: gfx_hal::Backend> Renderer<B> {
             use std::borrow::Borrow;
 
             use gfx_hal::command::{
-                ClearColor, ClearValue, CommandBuffer, CommandBufferFlags, SubpassContents,
-                RenderAttachmentInfo
+                CommandBuffer, CommandBufferFlags,
+                RenderAttachmentInfo, ClearValue, ClearColor, SubpassContents
             };
 
             res.command_buffer.begin_primary(CommandBufferFlags::ONE_TIME_SUBMIT);
@@ -477,8 +487,6 @@ impl<B: gfx_hal::Backend> Renderer<B> {
                 Some(&mut res.rendering_complete_semaphore),
             );
 
-            // Reconfigure Swapchain on the Next Frame
-            // If Error when Presenting
             self.should_configure_swapchain |= result.is_err();
 
             res.device.destroy_framebuffer(framebuffer);
