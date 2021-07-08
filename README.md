@@ -1,2 +1,2 @@
 # Rust-Engine
-A game engine and 3D software written in Rust.
+A 3D software for procedural generation written in Rust.
