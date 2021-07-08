@@ -76,7 +76,42 @@ impl State {
     }
 
     fn render(&mut self) -> Result<(), wgpu::SwapChainError> {
-        todo!()
+        let frame = self
+            .swap_chain
+            .get_current_frame()?
+            .output;
+
+        // Used to create a filled up CommandBuffer
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Render Encoder")
+        });
+
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[
+                    wgpu::RenderPassColorAttachment {
+                        view: &frame.view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.1,
+                                g: 0.2,
+                                b: 0.3,
+                                a: 1.0
+                            }),
+                            store: true
+                        }
+                    }
+                ],
+                depth_stencil_attachment: None
+            });
+        }
+
+        // Submit filled up CommandBuffer to queue
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(())
     }
 }
 
@@ -124,6 +159,31 @@ fn main() {
                 }
                 _ => {}
             }
+        },
+
+        Event::RedrawRequested(_) => {
+            state.update();
+
+            match state.render() {
+                Ok(_) => {}
+
+                // Recreate the swap_chain if lost
+                Err(wgpu::SwapChainError::Lost) =>
+                    state.resize(state.size),
+
+                // Exit if the system is out of memory
+                Err(wgpu::SwapChainError::OutOfMemory) =>
+                    *control_flow = ControlFlow::Exit,
+
+                // All other errors (Outdated, Timeout) should be resolved by the next frame
+                Err(e) =>
+                    eprintln!("{:?}", e),
+            }
+        },
+
+        Event::MainEventsCleared => {
+            // Redraw ASAP, Non-constant framerate
+            window.request_redraw();
         }
         _ => {}
     });
